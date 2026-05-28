@@ -441,23 +441,41 @@ async def handle_main_message(message: types.Message) -> None:
 
     # DB restore: admin sent a .db file after pressing Restore DB
     if user_id in restore_pending and message.document:
-        restore_pending.discard(user_id)
-        doc = message.document
-        if not (doc.file_name or "").endswith(".db"):
-            await message.reply("That doesn't look like a .db file. Restore cancelled.")
-            return
-        await message.reply("Downloading and restoring database…")
-        try:
-            file_info = await bot.get_file(doc.file_id)
-            buf = io.BytesIO()
-            await bot.download_file(file_info.file_path, buf)
-            await restore_db(buf.getvalue())
-            await message.reply("Database restored successfully!")
-        except ValueError as e:
-            await message.reply(f"Invalid file: {e}")
-        except Exception as e:
-            await message.reply(f"Restore failed: {e}")
+    restore_pending.discard(user_id)
+    doc = message.document
+    if not (doc.file_name or "").endswith(".db"):
+        await message.reply("That doesn't look like a .db file. Restore cancelled.")
         return
+
+    # Send initial "downloading..." message
+    msg = await message.reply("Downloading and restoring database…")
+
+    try:
+        file_info = await bot.get_file(doc.file_id)
+        buf = io.BytesIO()
+        await bot.download_file(file_info.file_path, buf)
+        await restore_db(buf.getvalue())
+
+        # Edit the previous message instead of sending a new one
+        await bot.edit_message_text(
+            "Database restored successfully!",
+            chat_id=msg.chat.id,
+            message_id=msg.message_id
+        )
+
+    except ValueError as e:
+        await bot.edit_message_text(
+            f"Invalid file: {e}",
+            chat_id=msg.chat.id,
+            message_id=msg.message_id
+        )
+    except Exception as e:
+        await bot.edit_message_text(
+            f"Restore failed: {e}",
+            chat_id=msg.chat.id,
+            message_id=msg.message_id
+        )
+    return
 
     if await spammer_message_handler(message):
         return
