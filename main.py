@@ -269,7 +269,10 @@ async def invoke_command(message: types.Message) -> None:
     if disabled:
         for token_obj in disabled:
             await delete_token(user_id, token_obj["token"])
-        names = ", ".join(t["name"] for t in disabled)
+        names = ", ".join(
+            f"{t['name']} ({t['email']})" if t.get("email") else t["name"]
+            for t in disabled
+        )
         await message.reply(f"Deleted {len(disabled)} disabled account(s): {names}")
     else:
         await message.reply("All accounts are working.")
