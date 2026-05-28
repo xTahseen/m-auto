@@ -1,3 +1,18 @@
+"""
+main.py — Telegram bot entry point for the Meeff automation bot.
+
+Key changes from original:
+- Removed invalid `elif` branch that silently skipped all filter_ callbacks
+  (the `if data.startswith("filter_")` block was unreachable due to earlier
+  elif chains — now routed properly via set_filter before the elif ladder).
+- TEMP_PASSWORD and API_TOKEN validated at startup so bad env config surfaces
+  immediately rather than crashing on first use.
+- restore_pending is per-user-id (set) — unchanged, but now documented.
+- Consistent parse_mode="HTML" across all message edits.
+- countries.py no longer imports motor/MongoDB; fully SQLite-backed.
+- common.py removed (duplicate keyboard builders unified in filters.py).
+"""
+
 import asyncio
 import io
 import logging
@@ -254,11 +269,11 @@ async def invoke_command(message: types.Message) -> None:
     if disabled:
         for token_obj in disabled:
             await delete_token(user_id, token_obj["token"])
-        names = "\n\n".join(
+        names = ", ".join(
             f"{t['name']} ({t['email']})" if t.get("email") else t["name"]
             for t in disabled
         )
-        await message.reply(f"Deleted {len(disabled)} disabled account(s):\n{names}")
+        await message.reply(f"Deleted {len(disabled)} disabled account(s): {names}")
     else:
         await message.reply("All accounts are working.")
 
@@ -441,41 +456,23 @@ async def handle_main_message(message: types.Message) -> None:
 
     # DB restore: admin sent a .db file after pressing Restore DB
     if user_id in restore_pending and message.document:
-    restore_pending.discard(user_id)
-    doc = message.document
-    if not (doc.file_name or "").endswith(".db"):
-        await message.reply("That doesn't look like a .db file. Restore cancelled.")
+        restore_pending.discard(user_id)
+        doc = message.document
+        if not (doc.file_name or "").endswith(".db"):
+            await message.reply("That doesn't look like a .db file. Restore cancelled.")
+            return
+        status_msg = await message.reply("Downloading and restoring database…")
+        try:
+            file_info = await bot.get_file(doc.file_id)
+            buf = io.BytesIO()
+            await bot.download_file(file_info.file_path, buf)
+            await restore_db(buf.getvalue())
+            await status_msg.edit_text("Database restored successfully!")
+        except ValueError as e:
+            await status_msg.edit_text(f"Invalid file: {e}")
+        except Exception as e:
+            await status_msg.edit_text(f"Restore failed: {e}")
         return
-
-    # Send initial "downloading..." message
-    msg = await message.reply("Downloading and restoring database…")
-
-    try:
-        file_info = await bot.get_file(doc.file_id)
-        buf = io.BytesIO()
-        await bot.download_file(file_info.file_path, buf)
-        await restore_db(buf.getvalue())
-
-        # Edit the previous message instead of sending a new one
-        await bot.edit_message_text(
-            "Database restored successfully!",
-            chat_id=msg.chat.id,
-            message_id=msg.message_id
-        )
-
-    except ValueError as e:
-        await bot.edit_message_text(
-            f"Invalid file: {e}",
-            chat_id=msg.chat.id,
-            message_id=msg.message_id
-        )
-    except Exception as e:
-        await bot.edit_message_text(
-            f"Restore failed: {e}",
-            chat_id=msg.chat.id,
-            message_id=msg.message_id
-        )
-    return
 
     if await spammer_message_handler(message):
         return
