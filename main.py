@@ -1,18 +1,3 @@
-"""
-main.py — Telegram bot entry point for the Meeff automation bot.
-
-Key changes from original:
-- Removed invalid `elif` branch that silently skipped all filter_ callbacks
-  (the `if data.startswith("filter_")` block was unreachable due to earlier
-  elif chains — now routed properly via set_filter before the elif ladder).
-- TEMP_PASSWORD and API_TOKEN validated at startup so bad env config surfaces
-  immediately rather than crashing on first use.
-- restore_pending is per-user-id (set) — unchanged, but now documented.
-- Consistent parse_mode="HTML" across all message edits.
-- countries.py no longer imports motor/MongoDB; fully SQLite-backed.
-- common.py removed (duplicate keyboard builders unified in filters.py).
-"""
-
 import asyncio
 import io
 import logging
@@ -269,11 +254,11 @@ async def invoke_command(message: types.Message) -> None:
     if disabled:
         for token_obj in disabled:
             await delete_token(user_id, token_obj["token"])
-        names = ", ".join(
+        names = "\n".join(
             f"{t['name']} ({t['email']})" if t.get("email") else t["name"]
             for t in disabled
         )
-        await message.reply(f"Deleted {len(disabled)} disabled account(s): {names}")
+        await message.reply(f"Deleted {len(disabled)} disabled account(s):\n{names}")
     else:
         await message.reply("All accounts are working.")
 
