@@ -87,6 +87,9 @@ DEFAULT_FILTER = {
     "filterLanguageCodes": "",
     "filterNationalityBlock": 0,
     "filterNationalityCode": "",
+    "filterMinProfileImageCount": 2,
+    "filterFaceVerifiedOnly": False,
+    "filterRecentlyActiveOnly": False,
     "locale": "en"
 }
 
