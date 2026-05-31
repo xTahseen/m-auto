@@ -128,9 +128,17 @@ async def safe_edit(bot, chat_id, msg_id, text, markup=None):
 async def update_country_filter(session, headers, country_code):
     url = "https://api.meeff.com/user/updateFilter/v1"
     data = {
-        "filterGenderType": 5, "filterBirthYearFrom": 1981, "filterBirthYearTo": 2007,
-        "filterDistance": 510, "filterLanguageCodes": "", "filterNationalityBlock": 0,
-        "filterNationalityCode": country_code, "locale": "en"
+        "filterGenderType": 5,
+        "filterBirthYearFrom": 1981,
+        "filterBirthYearTo": 2007,
+        "filterDistance": 510,
+        "filterLanguageCodes": "",
+        "filterNationalityBlock": 0,
+        "filterNationalityCode": country_code,
+        "filterMinProfileImageCount": 2,
+        "filterFaceVerifiedOnly": False,
+        "filterRecentlyActiveOnly": False,
+        "locale": "en"
     }
     try:
         async with session.post(url, json=data, headers=headers) as resp:
