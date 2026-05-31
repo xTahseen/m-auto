@@ -91,6 +91,9 @@ def _build_filter_data(existing: dict) -> dict:
         "filterLanguageCodes": existing.get("filterLanguageCodes", ""),
         "filterNationalityBlock": existing.get("filterNationalityBlock", 0),
         "filterNationalityCode": existing.get("filterNationalityCode", ""),
+        "filterMinProfileImageCount": existing.get("filterMinProfileImageCount", 2),
+        "filterFaceVerifiedOnly": existing.get("filterFaceVerifiedOnly", False),
+        "filterRecentlyActiveOnly": existing.get("filterRecentlyActiveOnly", False),
         "locale": "en",
     }
 
