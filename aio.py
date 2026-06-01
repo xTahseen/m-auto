@@ -98,7 +98,41 @@ async def _run_aio_requests(user_id: int, bot, status_message_id: int) -> None:
                             pass
                         return
                     async with session.get(explore_url, headers=headers) as resp:
-                        users = (await resp.json(content_type=None)).get("users", [])
+                        if resp.status == 429:
+                            try:
+                                await bot.edit_message_text(
+                                    chat_id=user_id,
+                                    message_id=status_message_id,
+                                    text=(
+                                        "⏳ <b>Daily request quota reached.</b>\n\n"
+                                        "You have exceeded today's quota on this account. "
+                                        "Please wait until tomorrow."
+                                    ),
+                                    parse_mode="HTML",
+                                )
+                            except Exception:
+                                pass
+                            return
+                        body = await resp.json(content_type=None)
+                        if body.get("errorCode") == "RequestExceeded":
+                            try:
+                                await bot.edit_message_text(
+                                    chat_id=user_id,
+                                    message_id=status_message_id,
+                                    text=(
+                                        "⏳ <b>Daily request quota reached.</b>\n\n"
+                                        "You have exceeded today's quota on this account. "
+                                        "Please wait until tomorrow."
+                                    ),
+                                    parse_mode="HTML",
+                                )
+                            except Exception:
+                                pass
+                            return
+                        users = body.get("users", [])
+                        if not users and not body.get("hasMore", True):
+                            # No more users available — move on to next account
+                            break
                 except Exception as e:
                     logger.warning("AIO fetch_users error: %s", e)
                     break
@@ -126,7 +160,7 @@ async def _run_aio_requests(user_id: int, bot, status_message_id: int) -> None:
                     except Exception:
                         continue
                     if data.get("errorCode") == "LikeExceeded":
-                        account_lines[-1] += " (Limit Exceeded)"
+                        account_lines[-1] += " (⏳ Quota Exceeded)"
                         limit_hit = True
                         break
                     total_added += 1

@@ -31,6 +31,12 @@ logger = logging.getLogger(__name__)
 class MissingExploreUrlError(Exception):
     """Raised when no explore URL has been saved for the user."""
 
+class RequestExceededError(Exception):
+    """Raised when the API returns HTTP 429 / errorCode RequestExceeded."""
+
+class NoMoreUsersError(Exception):
+    """Raised when the API returns an empty user list with hasMore=false."""
+
 # ─── Constants ─────────────────────────────────────────────────────────────────
 
 _MEEFF_ANSWER_URL = "https://api.meeff.com/user/undoableAnswer/v5/?userId={user_id}&isOkay=1"
@@ -144,9 +150,15 @@ def format_progress_single(account_name: str, added: int, skipped: int) -> str:
 def _format_result_single(account_name: str, added: int, skipped: int,
                            start: datetime, end: datetime,
                            like_exceeded: bool = False,
+                           no_more_users: bool = False,
                            stopped_by_user: bool = False) -> str:
     header = "<b>[ STOPPED ]</b>" if stopped_by_user else "<b>[ DONE ]</b>"
-    extra = "\n<b>Daily like limit reached.</b>" if like_exceeded else ""
+    if like_exceeded:
+        extra = "\n<b>⏳ Daily request quota reached. Please wait until tomorrow.</b>"
+    elif no_more_users:
+        extra = "\n<b>✅ No more users available right now.</b>"
+    else:
+        extra = ""
     return (
         f"{header}\n"
         f"Account: {html.escape(account_name)}{extra}\n\n"
@@ -161,7 +173,9 @@ def format_progress(accounts: list[dict], names: list[str]) -> str:
     for i, acc in enumerate(accounts):
         s = f"{i+1}. {html.escape(names[i])}: {acc['added']} sent, {acc['skipped']} skipped"
         if acc.get("exceeded"):
-            s += " <b>(Limit Exceeded)</b>"
+            s += " <b>(⏳ Quota Exceeded)</b>"
+        elif acc.get("no_more"):
+            s += " <b>(✅ No More Users)</b>"
         lines.append(s)
     lines.append("\nProcessing… tap Stop to interrupt.")
     return "\n".join(lines)
@@ -175,7 +189,9 @@ def _format_result(accounts: list[dict], names: list[str],
     for i, acc in enumerate(accounts):
         s = f"{i+1}. {html.escape(names[i])}: {acc['added']} sent, {acc['skipped']} skipped"
         if acc.get("exceeded"):
-            s += " <b>(Limit Exceeded)</b>"
+            s += " <b>(⏳ Quota Exceeded)</b>"
+        elif acc.get("no_more"):
+            s += " <b>(✅ No More Users)</b>"
         lines.append(s)
     lines.append(f"Time: {_format_time(start, end)}")
     return "\n".join(lines)
@@ -205,8 +221,19 @@ async def _fetch_users(session: aiohttp.ClientSession, token: str, user_id=None)
     headers = {"meeff-access-token": token, "Connection": "keep-alive"}
     try:
         async with session.get(url, headers=headers) as resp:
-            return (await resp.json(content_type=None)).get("users", [])
-    except MissingExploreUrlError:
+            # 429 → quota exceeded for today
+            if resp.status == 429:
+                raise RequestExceededError()
+            body = await resp.json(content_type=None)
+            # Quota exceeded returned as 200 with errorCode
+            if body.get("errorCode") == "RequestExceeded":
+                raise RequestExceededError()
+            users = body.get("users", [])
+            # Empty list with hasMore=false means no more users available
+            if not users and not body.get("hasMore", True):
+                raise NoMoreUsersError()
+            return users
+    except (MissingExploreUrlError, RequestExceededError, NoMoreUsersError):
         raise
     except Exception as e:
         logger.warning("fetch_users error: %s", e)
@@ -260,6 +287,7 @@ async def run_requests_single(user_id, state: dict, bot, token: str,
     last_text: str | None = None
     last_update_time = 0
     like_exceeded = False
+    no_more_users = False
     sent_since_filter = 0
 
     async def _update(force: bool = False) -> None:
@@ -289,6 +317,14 @@ async def run_requests_single(user_id, state: dict, bot, token: str,
                     "It should start with: <code>https://api.meeff.com/user/explore/</code>",
                 )
                 return
+            except RequestExceededError:
+                state["running"] = False
+                like_exceeded = True
+                break
+            except NoMoreUsersError:
+                state["running"] = False
+                no_more_users = True
+                break
             if not users:
                 await asyncio.sleep(2)
                 continue
@@ -336,6 +372,7 @@ async def run_requests_single(user_id, state: dict, bot, token: str,
         _format_result_single(
             account_name, added, skipped, start_time, end_time,
             like_exceeded=like_exceeded,
+            no_more_users=no_more_users,
             stopped_by_user=state.get("stopped_by_user", False),
         ),
     )
@@ -344,7 +381,7 @@ async def run_requests_single(user_id, state: dict, bot, token: str,
 async def run_requests_parallel(user_id, bot, tokens: list[dict],
                                  status_message_id: int, state: dict, speed: float) -> None:
     start_time = datetime.now()
-    accounts = [{"added": 0, "skipped": 0, "exceeded": False, "running": True} for _ in tokens]
+    accounts = [{"added": 0, "skipped": 0, "exceeded": False, "no_more": False, "running": True} for _ in tokens]
     names = [tok.get("name", f"Account {i+1}") for i, tok in enumerate(tokens)]
     state["per_account"] = accounts
     state["account_names"] = names
@@ -381,6 +418,16 @@ async def run_requests_parallel(user_id, bot, tokens: list[dict],
                         "Please send your Explore URL in chat to continue.\n"
                         "It should start with: <code>https://api.meeff.com/user/explore/</code>",
                     )
+                    return
+                except RequestExceededError:
+                    acc["exceeded"] = True
+                    acc["running"] = False
+                    await _update(force=True)
+                    return
+                except NoMoreUsersError:
+                    acc["no_more"] = True
+                    acc["running"] = False
+                    await _update(force=True)
                     return
                 if not users:
                     await asyncio.sleep(2)
@@ -472,7 +519,7 @@ async def _start_all_run(user_id, state: dict, bot, tokens: list[dict],
                           speed: float, reply_target) -> None:
     state.update({"running": True, "finalized": False, "mode": "all"})
     init_names = [tok.get("name", f"Account {i+1}") for i, tok in enumerate(tokens)]
-    init_accounts = [{"added": 0, "skipped": 0, "exceeded": False} for _ in tokens]
+    init_accounts = [{"added": 0, "skipped": 0, "exceeded": False, "no_more": False} for _ in tokens]
     if hasattr(reply_target, "edit_text"):
         status_msg = await reply_target.edit_text(
             format_progress(init_accounts, init_names), reply_markup=STOP_MARKUP, parse_mode="HTML"
