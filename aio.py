@@ -72,14 +72,15 @@ async def _run_aio_requests(user_id: int, bot, status_message_id: int) -> None:
         for idx, token_info in enumerate(tokens):
             token = token_info["token"]
             name = token_info.get("name", f"Account {idx + 1}")
-            account_lines.append(f"{idx + 1}. {name}: 0 added")
+            acc_added = 0
+            account_lines.append(f"{idx + 1}. {html.escape(name)}: 0 added")
             await _refresh_status("Running…")
 
             while True:
-                # Check cancellation between pages
                 await asyncio.sleep(0)
 
                 headers = {**headers_base, "meeff-access-token": token}
+                users = []
                 try:
                     explore_url = await get_explore_url(user_id)
                     if not explore_url:
@@ -99,39 +100,35 @@ async def _run_aio_requests(user_id: int, bot, status_message_id: int) -> None:
                         return
                     async with session.get(explore_url, headers=headers) as resp:
                         if resp.status == 429:
-                            try:
-                                await bot.edit_message_text(
-                                    chat_id=user_id,
-                                    message_id=status_message_id,
-                                    text=(
-                                        "⏳ <b>Daily request quota reached.</b>\n\n"
-                                        "You have exceeded today's quota on this account. "
-                                        "Please wait until tomorrow."
-                                    ),
-                                    parse_mode="HTML",
-                                )
-                            except Exception:
-                                pass
-                            return
+                            account_lines[-1] = (
+                                f"{idx + 1}. {html.escape(name)}: {acc_added} added"
+                                " <b>(⏳ Quota Exceeded)</b>"
+                            )
+                            await _refresh_status("Running…")
+                            break
                         body = await resp.json(content_type=None)
-                        if body.get("errorCode") == "RequestExceeded":
-                            try:
-                                await bot.edit_message_text(
-                                    chat_id=user_id,
-                                    message_id=status_message_id,
-                                    text=(
-                                        "⏳ <b>Daily request quota reached.</b>\n\n"
-                                        "You have exceeded today's quota on this account. "
-                                        "Please wait until tomorrow."
-                                    ),
-                                    parse_mode="HTML",
-                                )
-                            except Exception:
-                                pass
-                            return
+                        error_code = body.get("errorCode")
+                        if error_code == "RequestExceeded":
+                            account_lines[-1] = (
+                                f"{idx + 1}. {html.escape(name)}: {acc_added} added"
+                                " <b>(⏳ Quota Exceeded)</b>"
+                            )
+                            await _refresh_status("Running…")
+                            break
+                        if error_code == "AuthRequired":
+                            account_lines[-1] = (
+                                f"{idx + 1}. {html.escape(name)}: {acc_added} added"
+                                " <b>(🔒 Logged Out)</b>"
+                            )
+                            await _refresh_status("Running…")
+                            break
                         users = body.get("users", [])
                         if not users and not body.get("hasMore", True):
-                            # No more users available — move on to next account
+                            account_lines[-1] = (
+                                f"{idx + 1}. {html.escape(name)}: {acc_added} added"
+                                " <b>(✅ No More Users)</b>"
+                            )
+                            await _refresh_status("Running…")
                             break
                 except Exception as e:
                     logger.warning("AIO fetch_users error: %s", e)
@@ -143,7 +140,6 @@ async def _run_aio_requests(user_id: int, bot, status_message_id: int) -> None:
                 limit_hit = False
                 for user in users:
                     await asyncio.sleep(0)
-                    # Blocklist check
                     if await is_blocklist_active(user_id):
                         if await atomic_check_and_add_blocklist(user_id, user["_id"]):
                             continue
@@ -160,32 +156,20 @@ async def _run_aio_requests(user_id: int, bot, status_message_id: int) -> None:
                     except Exception:
                         continue
                     if data.get("errorCode") == "LikeExceeded":
-                        account_lines[-1] += " (⏳ Quota Exceeded)"
+                        account_lines[-1] = (
+                            f"{idx + 1}. {html.escape(name)}: {acc_added} added"
+                            " <b>(⏳ Quota Exceeded)</b>"
+                        )
                         limit_hit = True
                         break
+                    acc_added += 1
                     total_added += 1
-                    account_lines[-1] = f"{idx + 1}. {name}: {total_added} added"
+                    account_lines[-1] = f"{idx + 1}. {html.escape(name)}: {acc_added} added"
                     await _refresh_status(f"Total added: {total_added}")
                     await asyncio.sleep(2)
 
                 if limit_hit:
                     break
-
-    try:
-        await bot.edit_message_text(
-            chat_id=user_id, message_id=status_message_id,
-            text=(
-                f"Total Accounts: {len(tokens)}\n\n"
-                + "\n\n".join(account_lines)
-                + f"\n\nTotal Added Friends: {total_added}"
-            ),
-            reply_markup=aio_markup,
-        )
-    except Exception:
-        pass
-
-
-# ─── Bulk action helpers ──────────────────────────────────────────────────────
 
 async def _run_for_all(user_id: int, bot, status_message_id: int,
                         action_fn, action_label: str) -> None:
