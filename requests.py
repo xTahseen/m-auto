@@ -219,30 +219,38 @@ async def _fetch_users(session: aiohttp.ClientSession, token: str, user_id=None)
     if not url:
         raise MissingExploreUrlError()
     headers = {"meeff-access-token": token, "Connection": "keep-alive"}
+    logger.info("[fetch_users] uid=%s GET %s", user_id, url)
     try:
         async with session.get(url, headers=headers) as resp:
+            logger.info("[fetch_users] uid=%s HTTP %s", user_id, resp.status)
             # 429 → quota exceeded for today
             if resp.status == 429:
+                logger.warning("[fetch_users] uid=%s 429 RequestExceeded", user_id)
                 raise RequestExceededError()
             body = await resp.json(content_type=None)
+            logger.info("[fetch_users] uid=%s body=%s", user_id, body)
             # Quota exceeded returned as 200 with errorCode
             if body.get("errorCode") == "RequestExceeded":
+                logger.warning("[fetch_users] uid=%s errorCode=RequestExceeded", user_id)
                 raise RequestExceededError()
             users = body.get("users", [])
+            logger.info("[fetch_users] uid=%s users=%d hasMore=%s", user_id, len(users), body.get("hasMore"))
             # Empty list with hasMore=false means no more users available
             if not users and not body.get("hasMore", True):
+                logger.info("[fetch_users] uid=%s no more users", user_id)
                 raise NoMoreUsersError()
             return users
     except (MissingExploreUrlError, RequestExceededError, NoMoreUsersError):
         raise
     except Exception as e:
-        logger.warning("fetch_users error: %s", e)
+        logger.warning("[fetch_users] uid=%s error: %s", user_id, e)
         return []
 
 
 async def _push_filters(session: aiohttp.ClientSession, user_id, token: str) -> None:
     filters = await get_user_filters(user_id, token)
     if not filters:
+        logger.info("[push_filters] uid=%s no filters to push", user_id)
         return
     headers = {
         "User-Agent": "okhttp/4.12.0",
@@ -250,12 +258,14 @@ async def _push_filters(session: aiohttp.ClientSession, user_id, token: str) -> 
         "meeff-access-token": token,
         "content-type": "application/json; charset=utf-8",
     }
+    logger.info("[push_filters] uid=%s pushing filters: %s", user_id, filters)
     try:
         async with session.post(_MEEFF_FILTER_URL, data=json.dumps(filters), headers=headers) as resp:
+            logger.info("[push_filters] uid=%s HTTP %s", user_id, resp.status)
             if resp.status != 200:
-                logger.warning("Filter push failed: %s", resp.status)
+                logger.warning("[push_filters] uid=%s failed: %s", user_id, resp.status)
     except Exception as e:
-        logger.warning("Filter push error: %s", e)
+        logger.warning("[push_filters] uid=%s error: %s", user_id, e)
 
 
 async def _should_skip(user_id, user_data: dict) -> bool:
@@ -303,11 +313,13 @@ async def run_requests_single(user_id, state: dict, bot, token: str,
 
     headers = {"meeff-access-token": token, "Connection": "keep-alive"}
     connector = aiohttp.TCPConnector(limit=10)
+    logger.info("[single] uid=%s account=%r speed=%s starting", user_id, account_name, speed)
     async with aiohttp.ClientSession(connector=connector) as session:
         while state.get("running", True):
             try:
                 users = await _fetch_users(session, token, user_id)
             except MissingExploreUrlError:
+                logger.warning("[single] uid=%s no explore URL — stopping", user_id)
                 state["running"] = False
                 state["finalized"] = True
                 await safe_edit(
@@ -318,31 +330,39 @@ async def run_requests_single(user_id, state: dict, bot, token: str,
                 )
                 return
             except RequestExceededError:
+                logger.warning("[single] uid=%s request quota exceeded — stopping", user_id)
                 state["running"] = False
                 like_exceeded = True
                 break
             except NoMoreUsersError:
+                logger.info("[single] uid=%s no more users — stopping", user_id)
                 state["running"] = False
                 no_more_users = True
                 break
             if not users:
+                logger.info("[single] uid=%s empty user list (transient) — sleeping 2s", user_id)
                 await asyncio.sleep(2)
                 continue
 
+            logger.info("[single] uid=%s got %d users to process", user_id, len(users))
             for user in users:
                 if not state.get("running", True):
                     break
 
                 if await _should_skip(user_id, user):
+                    logger.info("[single] uid=%s skip user=%s", user_id, user.get("_id"))
                     skipped += 1
                     await _update()
                     continue
 
                 url = _MEEFF_ANSWER_URL.format(user_id=user["_id"])
+                logger.info("[single] uid=%s sending like → user=%s", user_id, user.get("_id"))
                 async with session.get(url, headers=headers) as resp:
                     data = await resp.json(content_type=None)
+                logger.info("[single] uid=%s like response: %s", user_id, data)
 
                 if data.get("errorCode") == "LikeExceeded":
+                    logger.warning("[single] uid=%s LikeExceeded — stopping", user_id)
                     like_exceeded = True
                     state["running"] = False
                     break
@@ -402,14 +422,17 @@ async def run_requests_parallel(user_id, bot, tokens: list[dict],
     async def _worker(idx: int, token_obj: dict) -> None:
         acc = accounts[idx]
         token = token_obj["token"]
+        name = names[idx]
         sent_since_filter = 0
         headers = {"meeff-access-token": token, "Connection": "keep-alive"}
         connector = aiohttp.TCPConnector(limit=10)
+        logger.info("[worker] uid=%s acct=%d(%r) starting", user_id, idx, name)
         async with aiohttp.ClientSession(connector=connector) as session:
             while acc["running"] and state.get("running", True):
                 try:
                     users = await _fetch_users(session, token, user_id)
                 except MissingExploreUrlError:
+                    logger.warning("[worker] uid=%s acct=%d no explore URL — stopping", user_id, idx)
                     acc["running"] = False
                     state["running"] = False
                     await safe_edit(
@@ -420,33 +443,41 @@ async def run_requests_parallel(user_id, bot, tokens: list[dict],
                     )
                     return
                 except RequestExceededError:
+                    logger.warning("[worker] uid=%s acct=%d request quota exceeded — stopping", user_id, idx)
                     acc["exceeded"] = True
                     acc["running"] = False
                     await _update(force=True)
                     return
                 except NoMoreUsersError:
+                    logger.info("[worker] uid=%s acct=%d no more users — stopping", user_id, idx)
                     acc["no_more"] = True
                     acc["running"] = False
                     await _update(force=True)
                     return
                 if not users:
+                    logger.info("[worker] uid=%s acct=%d empty user list (transient) — sleeping 2s", user_id, idx)
                     await asyncio.sleep(2)
                     continue
 
+                logger.info("[worker] uid=%s acct=%d got %d users", user_id, idx, len(users))
                 for user in users:
                     if not acc["running"] or not state.get("running", True):
                         break
 
                     if await _should_skip(user_id, user):
+                        logger.info("[worker] uid=%s acct=%d skip user=%s", user_id, idx, user.get("_id"))
                         acc["skipped"] += 1
                         await _update()
                         continue
 
                     url = _MEEFF_ANSWER_URL.format(user_id=user["_id"])
+                    logger.info("[worker] uid=%s acct=%d sending like → user=%s", user_id, idx, user.get("_id"))
                     async with session.get(url, headers=headers) as resp:
                         data = await resp.json(content_type=None)
+                    logger.info("[worker] uid=%s acct=%d like response: %s", user_id, idx, data)
 
                     if data.get("errorCode") == "LikeExceeded":
+                        logger.warning("[worker] uid=%s acct=%d LikeExceeded — stopping", user_id, idx)
                         acc["exceeded"] = True
                         acc["running"] = False
                         await _update(force=True)
@@ -470,12 +501,15 @@ async def run_requests_parallel(user_id, bot, tokens: list[dict],
                 if speed > 0:
                     await asyncio.sleep(speed)
 
+        logger.info("[worker] uid=%s acct=%d done — added=%d skipped=%d", user_id, idx, acc["added"], acc["skipped"])
         await _update(force=True)
 
     state["finalized"] = False
+    logger.info("[parallel] uid=%s starting %d workers", user_id, len(tokens))
     await safe_edit(bot, user_id, status_message_id, format_progress(accounts, names), STOP_MARKUP)
     await asyncio.gather(*(_worker(idx, tok) for idx, tok in enumerate(tokens)))
     end_time = datetime.now()
+    logger.info("[parallel] uid=%s all workers done", user_id)
     state["finalized"] = True
     await safe_edit(
         bot, user_id, status_message_id,
