@@ -37,6 +37,9 @@ class RequestExceededError(Exception):
 class NoMoreUsersError(Exception):
     """Raised when the API returns an empty user list with hasMore=false."""
 
+class AuthRequiredError(Exception):
+    """Raised when the API returns errorCode AuthRequired (token expired / logged out)."""
+
 # ─── Constants ─────────────────────────────────────────────────────────────────
 
 _MEEFF_ANSWER_URL = "https://api.meeff.com/user/undoableAnswer/v5/?userId={user_id}&isOkay=1"
@@ -176,6 +179,8 @@ def format_progress(accounts: list[dict], names: list[str]) -> str:
             s += " <b>(⏳ Quota Exceeded)</b>"
         elif acc.get("no_more"):
             s += " <b>(✅ No More Users)</b>"
+        elif acc.get("auth_error"):
+            s += " <b>(🔒 Logged Out)</b>"
         lines.append(s)
     lines.append("\nProcessing… tap Stop to interrupt.")
     return "\n".join(lines)
@@ -192,6 +197,8 @@ def _format_result(accounts: list[dict], names: list[str],
             s += " <b>(⏳ Quota Exceeded)</b>"
         elif acc.get("no_more"):
             s += " <b>(✅ No More Users)</b>"
+        elif acc.get("auth_error"):
+            s += " <b>(🔒 Logged Out — update token)</b>"
         lines.append(s)
     lines.append(f"Time: {_format_time(start, end)}")
     return "\n".join(lines)
@@ -221,19 +228,19 @@ async def _fetch_users(session: aiohttp.ClientSession, token: str, user_id=None)
     headers = {"meeff-access-token": token, "Connection": "keep-alive"}
     try:
         async with session.get(url, headers=headers) as resp:
-            # 429 → quota exceeded for today
             if resp.status == 429:
                 raise RequestExceededError()
             body = await resp.json(content_type=None)
-            # Quota exceeded returned as 200 with errorCode
-            if body.get("errorCode") == "RequestExceeded":
+            error_code = body.get("errorCode")
+            if error_code == "RequestExceeded":
                 raise RequestExceededError()
+            if error_code == "AuthRequired":
+                raise AuthRequiredError()
             users = body.get("users", [])
-            # Empty list with hasMore=false means no more users available
             if not users and not body.get("hasMore", True):
                 raise NoMoreUsersError()
             return users
-    except (MissingExploreUrlError, RequestExceededError, NoMoreUsersError):
+    except (MissingExploreUrlError, RequestExceededError, NoMoreUsersError, AuthRequiredError):
         raise
     except Exception as e:
         logger.warning("fetch_users error: %s", e)
@@ -253,9 +260,9 @@ async def _push_filters(session: aiohttp.ClientSession, user_id, token: str) -> 
     try:
         async with session.post(_MEEFF_FILTER_URL, data=json.dumps(filters), headers=headers) as resp:
             if resp.status != 200:
-                logger.warning("Filter push failed: %s", resp.status)
+                logger.warning("filter push failed: %s", resp.status)
     except Exception as e:
-        logger.warning("Filter push error: %s", e)
+        logger.warning("filter push error: %s", e)
 
 
 async def _should_skip(user_id, user_data: dict) -> bool:
@@ -325,6 +332,16 @@ async def run_requests_single(user_id, state: dict, bot, token: str,
                 state["running"] = False
                 no_more_users = True
                 break
+            except AuthRequiredError:
+                state["running"] = False
+                state["finalized"] = True
+                await safe_edit(
+                    bot, user_id, state["status_message_id"],
+                    f"🔒 <b>Account logged out.</b>\n\n"
+                    f"<b>{html.escape(account_name)}</b> session has expired. "
+                    f"Please re-login and update the token.",
+                )
+                return
             if not users:
                 await asyncio.sleep(2)
                 continue
@@ -381,7 +398,7 @@ async def run_requests_single(user_id, state: dict, bot, token: str,
 async def run_requests_parallel(user_id, bot, tokens: list[dict],
                                  status_message_id: int, state: dict, speed: float) -> None:
     start_time = datetime.now()
-    accounts = [{"added": 0, "skipped": 0, "exceeded": False, "no_more": False, "running": True} for _ in tokens]
+    accounts = [{"added": 0, "skipped": 0, "exceeded": False, "no_more": False, "auth_error": False, "running": True} for _ in tokens]
     names = [tok.get("name", f"Account {i+1}") for i, tok in enumerate(tokens)]
     state["per_account"] = accounts
     state["account_names"] = names
@@ -402,6 +419,7 @@ async def run_requests_parallel(user_id, bot, tokens: list[dict],
     async def _worker(idx: int, token_obj: dict) -> None:
         acc = accounts[idx]
         token = token_obj["token"]
+        name = names[idx]
         sent_since_filter = 0
         headers = {"meeff-access-token": token, "Connection": "keep-alive"}
         connector = aiohttp.TCPConnector(limit=10)
@@ -426,6 +444,11 @@ async def run_requests_parallel(user_id, bot, tokens: list[dict],
                     return
                 except NoMoreUsersError:
                     acc["no_more"] = True
+                    acc["running"] = False
+                    await _update(force=True)
+                    return
+                except AuthRequiredError:
+                    acc["auth_error"] = True
                     acc["running"] = False
                     await _update(force=True)
                     return
@@ -519,7 +542,7 @@ async def _start_all_run(user_id, state: dict, bot, tokens: list[dict],
                           speed: float, reply_target) -> None:
     state.update({"running": True, "finalized": False, "mode": "all"})
     init_names = [tok.get("name", f"Account {i+1}") for i, tok in enumerate(tokens)]
-    init_accounts = [{"added": 0, "skipped": 0, "exceeded": False, "no_more": False} for _ in tokens]
+    init_accounts = [{"added": 0, "skipped": 0, "exceeded": False, "no_more": False, "auth_error": False} for _ in tokens]
     if hasattr(reply_target, "edit_text"):
         status_msg = await reply_target.edit_text(
             format_progress(init_accounts, init_names), reply_markup=STOP_MARKUP, parse_mode="HTML"
