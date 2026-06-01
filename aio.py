@@ -53,6 +53,17 @@ async def _run_aio_requests(user_id: int, bot, status_message_id: int) -> None:
     total_added = 0
     account_lines: list[str] = []
 
+    if not tokens:
+        try:
+            await bot.edit_message_text(
+                chat_id=user_id, message_id=status_message_id,
+                text="⚠️ <b>No accounts found.</b>\n\nAdd a token first.",
+                reply_markup=aio_markup, parse_mode="HTML",
+            )
+        except Exception:
+            pass
+        return
+
     async def _refresh_status(suffix: str = "") -> None:
         text = (
             f"Total Accounts: {len(tokens)}\n\n"
@@ -62,7 +73,7 @@ async def _run_aio_requests(user_id: int, bot, status_message_id: int) -> None:
         try:
             await bot.edit_message_text(
                 chat_id=user_id, message_id=status_message_id,
-                text=text, reply_markup=_aio_processing_markup,
+                text=text, reply_markup=_aio_processing_markup, parse_mode="HTML",
             )
         except Exception:
             pass
@@ -170,6 +181,20 @@ async def _run_aio_requests(user_id: int, bot, status_message_id: int) -> None:
 
                 if limit_hit:
                     break
+
+    try:
+        await bot.edit_message_text(
+            chat_id=user_id, message_id=status_message_id,
+            text=(
+                f"<b>[ DONE ]</b>\n\nTotal Accounts: {len(tokens)}\n\n"
+                + "\n\n".join(account_lines)
+                + f"\n\nTotal Added Friends: {total_added}"
+            ),
+            reply_markup=aio_markup, parse_mode="HTML",
+        )
+    except Exception:
+        pass
+
 
 async def _run_for_all(user_id: int, bot, status_message_id: int,
                         action_fn, action_label: str) -> None:
