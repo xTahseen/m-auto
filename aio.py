@@ -27,11 +27,9 @@ from countries import should_include_user
 
 logger = logging.getLogger(__name__)
 
-# ─── Task registry (replaces the old module-level user_states dict) ───────────
-# Maps user_id → asyncio.Task so we can cancel it cleanly.
+
 _running_tasks: dict[int, asyncio.Task] = {}
 
-# ─── Markups ──────────────────────────────────────────────────────────────────
 
 aio_markup = InlineKeyboardMarkup(inline_keyboard=[
     [InlineKeyboardButton(text="Start Requests", callback_data="aio_start_requests")],
@@ -46,7 +44,6 @@ _aio_processing_markup = InlineKeyboardMarkup(inline_keyboard=[
     [InlineKeyboardButton(text="Stop Requests", callback_data="aio_stop_requests")],
 ])
 
-# ─── Request runner (AIO-specific, sequential over accounts) ─────────────────
 
 async def _run_aio_requests(user_id: int, bot, status_message_id: int) -> None:
     tokens = await get_tokens(user_id)
@@ -265,8 +262,6 @@ async def _run_skip_all(user_id: int, bot, status_message_id: int) -> None:
     except Exception:
         pass
 
-
-# ─── Callback handler ─────────────────────────────────────────────────────────
 
 async def aio_callback_handler(callback_query: types.CallbackQuery) -> None:
     user_id = callback_query.from_user.id

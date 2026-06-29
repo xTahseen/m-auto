@@ -78,7 +78,7 @@ DEFAULT_PHOTOS = (
     "https://meeffus.s3.amazonaws.com/profile/2025/06/16/20250616052438006_profile-1.0-349bf38c-4555-40cc-a322-e61afe15aa35.jpg"
 )
 
-# Default filter for new accounts
+
 DEFAULT_FILTER = {
     "filterGenderType": 5,
     "filterBirthYearFrom": 1995,
@@ -150,7 +150,7 @@ async def signup_callback_handler(callback: CallbackQuery):
             await callback.message.edit_text("Choose an option:", reply_markup=SIGNUP_MENU)
             return True
         await callback.message.edit_text("Checking verification and logging in...", reply_markup=None)
-        # Pass the previously received accessToken so Meeff recognises the session
+
         login_result = await try_signin(
             creds['email'], creds['password'],
             state.get("device_info"),
@@ -166,7 +166,7 @@ async def signup_callback_handler(callback: CallbackQuery):
                 reply_markup=VERIFY_BUTTON
             )
         elif login_result.get("errorCode") in ("NotVerified", "EmailVerificationRequired"):
-            # Save/refresh the accessToken for subsequent re-login attempts
+
             if login_result.get("accessToken"):
                 state["pending_access_token"] = login_result["accessToken"]
             await callback.message.edit_text(
@@ -211,7 +211,7 @@ async def signup_callback_handler(callback: CallbackQuery):
                 "name": state["name"],
             }
             state["stage"] = "await_verify"
-            # Do an initial login to get the pending accessToken for subsequent verify attempts
+
             initial_login = await try_signin(state["email"], state["password"], state.get("device_info"))
             if initial_login.get("accessToken"):
                 state["pending_access_token"] = initial_login["accessToken"]
@@ -231,7 +231,7 @@ async def signup_message_handler(message: Message):
     if message.text and message.text.startswith("/"):
         return False
 
-    # SIGNUP FLOW
+
     if state.get("stage") == "ask_email":
         email = message.text.strip()
         ok, msg = await check_email_exists(email)
@@ -322,7 +322,7 @@ async def signup_message_handler(message: Message):
             await message.answer("Please send a photo or click Done to finish.")
             return True
 
-    # SIGNIN FLOW
+
     if state.get("stage") == "signin_email":
         state["stage"] = "signin_password"
         state["signin_email"] = message.text.strip()
@@ -337,18 +337,18 @@ async def signup_message_handler(message: Message):
         access_token = login_result.get("accessToken")
 
         if access_token and not error_code:
-            # Fully successful login — save and show card
+
             state["creds"] = {"email": email, "password": password}
             await store_token_and_show_card(processing_msg, login_result, state["creds"], device_info=state.get("device_info"))
             state["stage"] = "menu"
 
         elif error_code in ("EmailVerificationRequired", "NotVerified"):
-            # Account exists but email not verified — do NOT save to DB
-            # Store creds and pending token so user can verify and resend
+
+
             state["creds"] = {"email": email, "password": password}
             if access_token:
                 state["pending_access_token"] = access_token
-            # Auto-send verification email like signup flow does
+
             if access_token:
                 await resend_verification_email(access_token)
             state["stage"] = "await_verify"
@@ -467,7 +467,7 @@ async def try_signup(state):
         async with session.post(url, json=payload, headers=headers) as resp:
             result = await resp.json(content_type=None)
 
-    # Step 2: Accept TOS — required after registration
+
     user_id_meeff = result.get("user", {}).get("_id")
     if user_id_meeff:
         await accept_tos(user_id_meeff)
@@ -516,8 +516,8 @@ async def try_signin(email, password, device_info=None, access_token=None):
         'Accept-Encoding': "gzip",
         'content-type': "application/json; charset=utf-8"
     }
-    # When re-logging in after email verification, Meeff expects the token
-    # from the initial login response as meeff-access-token
+
+
     if access_token:
         headers['meeff-access-token'] = access_token
     async with aiohttp.ClientSession() as session:

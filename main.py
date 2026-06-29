@@ -42,7 +42,6 @@ from device_info import random_device_info
 
 load_dotenv()
 
-# ─── Config ───────────────────────────────────────────────────────────────────
 
 API_TOKEN = os.getenv("API_TOKEN")
 TEMP_PASSWORD = os.getenv("TEMP_PASSWORD")
@@ -61,13 +60,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ─── Bot / dispatcher setup ───────────────────────────────────────────────────
 
 bot = Bot(token=API_TOKEN)
 router = Router()
 dp = Dispatcher()
 
-# Per-user mutable state (non-persistent, reset on restart)
+
 user_states: dict[int, dict] = defaultdict(lambda: {
     "running": False,
     "status_message_id": None,
@@ -75,14 +73,12 @@ user_states: dict[int, dict] = defaultdict(lambda: {
     "total_added_friends": 0,
 })
 
-# user_ids awaiting a .db file upload for restore
+
 restore_pending: set[int] = set()
 
-# Temporary password sessions: user_id → expiry datetime
+
 password_access: dict[int, datetime] = {}
 
-
-# ─── Access helpers ────────────────────────────────────────────────────────────
 
 def is_admin(user_id: int) -> bool:
     return user_id in ADMIN_USER_IDS
@@ -94,8 +90,6 @@ def has_valid_access(user_id: int) -> bool:
     exp = password_access.get(user_id)
     return exp is not None and exp > datetime.now()
 
-
-# ─── Markups ──────────────────────────────────────────────────────────────────
 
 def get_tools_markup() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -129,11 +123,19 @@ back_markup = InlineKeyboardMarkup(inline_keyboard=[
 ])
 
 
-# ─── Account keyboard builder ──────────────────────────────────────────────────
+ACCOUNTS_PAGE_SIZE = 20
 
-def build_accounts_buttons(tokens: list[dict], current_token: str | None) -> InlineKeyboardMarkup:
+
+def build_accounts_buttons(tokens: list[dict], current_token: str | None, page: int = 0) -> InlineKeyboardMarkup:
+    total = len(tokens)
+    page_count = max(1, (total + ACCOUNTS_PAGE_SIZE - 1) // ACCOUNTS_PAGE_SIZE)
+    page = max(0, min(page, page_count - 1))
+    start = page * ACCOUNTS_PAGE_SIZE
+    end = start + ACCOUNTS_PAGE_SIZE
+
     buttons = []
-    for i, token in enumerate(tokens):
+    for i in range(start, min(end, total)):
+        token = tokens[i]
         is_current = token["token"] == current_token
         filters = token.get("filters") or {}
         cc = filters.get("filterNationalityCode", "")
@@ -144,18 +146,26 @@ def build_accounts_buttons(tokens: list[dict], current_token: str | None) -> Inl
             label = f"[>] {label}"
         active = token.get("active", True)
         buttons.append([
-            InlineKeyboardButton(text=label,                       callback_data=f"set_account_{i}"),
-            InlineKeyboardButton(text="On" if active else "Off", callback_data=f"toggle_account_{i}"),
-            InlineKeyboardButton(text="View",                        callback_data=f"view_account_{i}"),
-            InlineKeyboardButton(text="Delete",                        callback_data=f"delete_account_{i}"),
+            InlineKeyboardButton(text=label,                       callback_data=f"set_account_{i}_{page}"),
+            InlineKeyboardButton(text="On" if active else "Off", callback_data=f"toggle_account_{i}_{page}"),
+            InlineKeyboardButton(text="View",                        callback_data=f"view_account_{i}_{page}"),
+            InlineKeyboardButton(text="Delete",                        callback_data=f"delete_account_{i}_{page}"),
         ])
+
+    if page_count > 1:
+        nav_row = []
+        if page > 0:
+            nav_row.append(InlineKeyboardButton(text="< Previous", callback_data=f"accounts_page_{page - 1}"))
+        nav_row.append(InlineKeyboardButton(text=f"Page {page + 1}/{page_count}", callback_data="accounts_noop"))
+        if page < page_count - 1:
+            nav_row.append(InlineKeyboardButton(text="Next >", callback_data=f"accounts_page_{page + 1}"))
+        buttons.append(nav_row)
+
     buttons.append([InlineKeyboardButton(text="Back", callback_data="back_to_menu")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-# ─── Shared account UI refresh ────────────────────────────────────────────────
-
-async def _show_accounts(message, user_id: int) -> None:
+async def _show_accounts(message, user_id: int, page: int = 0) -> None:
     tokens = await get_all_tokens(user_id)
     current_token = await get_current_account(user_id)
     if not tokens:
@@ -164,13 +174,12 @@ async def _show_accounts(message, user_id: int) -> None:
             reply_markup=back_markup, parse_mode="HTML",
         )
     else:
+        total = len(tokens)
         await message.edit_text(
-            "<b>Manage Accounts</b>\n\nTap an account to select it as active.",
-            reply_markup=build_accounts_buttons(tokens, current_token), parse_mode="HTML",
+            f"<b>Manage Accounts</b> ({total} total, oldest first)\n\nTap an account to select it as active.",
+            reply_markup=build_accounts_buttons(tokens, current_token, page), parse_mode="HTML",
         )
 
-
-# ─── Commands ──────────────────────────────────────────────────────────────────
 
 @router.message(Command("password"))
 async def password_command(message: types.Message) -> None:
@@ -382,7 +391,7 @@ async def assign_command(message: types.Message) -> None:
                 "content-type": "application/json; charset=utf-8",
             }
 
-            # Warm-up call
+
             try:
                 async with session.post(
                     "https://api.meeff.com/api/init/v2",
@@ -393,7 +402,7 @@ async def assign_command(message: types.Message) -> None:
             except Exception as e:
                 logger.warning("init call failed for %s: %s", account_name, e)
 
-            # Fetch or generate device fingerprint
+
             stored_device = await get_device_info(user_id, old_token)
             device = stored_device or random_device_info()
             device_payload = {**device, "appVersion": "7.0.5", "locale": "en"}
@@ -432,14 +441,12 @@ async def assign_command(message: types.Message) -> None:
     await status.edit_text("Token refresh completed.")
 
 
-# ─── Catch-all message handler ────────────────────────────────────────────────
-
 @router.message()
 async def handle_main_message(message: types.Message) -> None:
     user_id = message.from_user.id
     state = user_states[user_id]
 
-    # DB restore: admin sent a .db file after pressing Restore DB
+
     if user_id in restore_pending and message.document:
         restore_pending.discard(user_id)
         doc = message.document
@@ -473,7 +480,7 @@ async def handle_main_message(message: types.Message) -> None:
         await handle_custom_speed_message(message, state, bot, get_tokens, get_current_account)
         return
 
-    # Ignore bot commands we didn't explicitly handle
+
     if message.text and message.text.startswith("/"):
         return
 
@@ -486,20 +493,20 @@ async def handle_main_message(message: types.Message) -> None:
 
     text = message.text.strip()
 
-    # Explore URL shortcut
+
     if text.startswith("https://api.meeff.com/user/explore/"):
         await set_explore_url(user_id, text)
         await message.reply("Explore URL saved!")
         return
 
-    # Token input
+
     parts = text.split(" ")
     token = parts[0]
     if len(token) < 10:
         await message.reply("Invalid token. Please try again.")
         return
 
-    # Verify the token against Meeff
+
     headers = {
         "User-Agent": "okhttp/5.0.0-alpha.14",
         "Accept-Encoding": "gzip",
@@ -526,8 +533,6 @@ async def handle_main_message(message: types.Message) -> None:
     await message.reply(f"Token saved as <b>{account_name}</b>.", parse_mode="HTML")
 
 
-# ─── Callback dispatcher ──────────────────────────────────────────────────────
-
 @router.callback_query()
 async def callback_handler(callback_query: CallbackQuery) -> None:
     user_id = callback_query.from_user.id
@@ -537,7 +542,7 @@ async def callback_handler(callback_query: CallbackQuery) -> None:
         await callback_query.answer("You are not authorized.")
         return
 
-    # Delegate to sub-handlers in priority order
+
     if await spammer_callback_handler(callback_query):
         return
     if await signup_callback_handler(callback_query):
@@ -565,20 +570,28 @@ async def callback_handler(callback_query: CallbackQuery) -> None:
         set_current_account, start_markup,
     ):
         return
-    # Route filter_ callbacks BEFORE the main elif ladder
+
     if callback_query.data.startswith("filter_"):
         await set_filter(callback_query)
         return
 
     data = callback_query.data
 
-    # ── Account management ───────────────────────────────────────────────────
+
     if data == "manage_accounts":
         await _show_accounts(callback_query.message, user_id)
         await callback_query.answer()
 
+    elif data == "accounts_noop":
+        await callback_query.answer()
+
+    elif data.startswith("accounts_page_"):
+        page = int(data.split("_")[-1])
+        await _show_accounts(callback_query.message, user_id, page)
+        await callback_query.answer()
+
     elif data.startswith("set_account_"):
-        index = int(data.split("_")[-1])
+        index, page = (int(x) for x in data.split("_")[-2:])
         tokens = await get_all_tokens(user_id)
         if index >= len(tokens):
             await callback_query.answer("Invalid account.")
@@ -587,32 +600,32 @@ async def callback_handler(callback_query: CallbackQuery) -> None:
             await callback_query.answer("This account is off. Turn it on first.")
             return
         await set_current_account(user_id, tokens[index]["token"])
-        await _show_accounts(callback_query.message, user_id)
+        await _show_accounts(callback_query.message, user_id, page)
         await callback_query.answer()
 
     elif data.startswith("delete_account_"):
-        index = int(data.split("_")[-1])
+        index, page = (int(x) for x in data.split("_")[-2:])
         tokens = await get_all_tokens(user_id)
         if index >= len(tokens):
             await callback_query.answer("Invalid account.")
             return
         await delete_token(user_id, tokens[index]["token"])
         await callback_query.answer("Account deleted.")
-        await _show_accounts(callback_query.message, user_id)
+        await _show_accounts(callback_query.message, user_id, page)
 
     elif data.startswith("toggle_account_"):
-        index = int(data.split("_")[-1])
+        index, page = (int(x) for x in data.split("_")[-2:])
         tokens = await get_all_tokens(user_id)
         if index >= len(tokens):
             await callback_query.answer("Invalid account.")
             return
         current_status = tokens[index].get("active", True)
         await set_account_active(user_id, tokens[index]["token"], not current_status)
-        await _show_accounts(callback_query.message, user_id)
+        await _show_accounts(callback_query.message, user_id, page)
         await callback_query.answer()
 
     elif data.startswith("view_account_"):
-        index = int(data.split("_")[-1])
+        index, page = (int(x) for x in data.split("_")[-2:])
         tokens = await get_all_tokens(user_id)
         if index >= len(tokens):
             await callback_query.answer("Invalid account.")
@@ -624,7 +637,7 @@ async def callback_handler(callback_query: CallbackQuery) -> None:
         else:
             await callback_query.answer("No info card for this account.")
 
-    # ── Navigation ───────────────────────────────────────────────────────────
+
     elif data in ("back_to_menu", "open_tools"):
         try:
             await callback_query.message.edit_text(
@@ -645,7 +658,7 @@ async def callback_handler(callback_query: CallbackQuery) -> None:
                 raise
         await callback_query.answer()
 
-    # ── Settings shortcuts ───────────────────────────────────────────────────
+
     elif data == "settings_filters":
         await filter_command(callback_query.message, edit=True)
         await callback_query.answer()
@@ -653,7 +666,7 @@ async def callback_handler(callback_query: CallbackQuery) -> None:
     elif data == "settings_blocklist":
         await blocklist_command(callback_query, edit=True)
 
-    # ── DB backup / restore ──────────────────────────────────────────────────
+
     elif data == "db_backup":
         if not is_admin(user_id):
             await callback_query.answer("Admins only.", show_alert=True)
@@ -682,8 +695,6 @@ async def callback_handler(callback_query: CallbackQuery) -> None:
             parse_mode="HTML",
         )
 
-
-# ─── Bot setup ────────────────────────────────────────────────────────────────
 
 async def set_bot_commands() -> None:
     commands = [

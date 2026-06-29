@@ -24,12 +24,9 @@ BLOCKLIST_MARKUP = InlineKeyboardMarkup(inline_keyboard=[
     [InlineKeyboardButton(text="Back", callback_data="back_to_menu")],
 ])
 
-# Lock used by atomic_check_and_add_blocklist to prevent race conditions
-# between the read and the write when multiple parallel workers run.
+
 _blocklist_lock = asyncio.Lock()
 
-
-# ─── Read helpers ─────────────────────────────────────────────────────────────
 
 async def get_user_blocklist(user_id) -> set:
     """Return the union of permanent + temporary blocklists."""
@@ -53,8 +50,6 @@ async def is_blocklist_active(user_id) -> bool:
     doc = await db.get_blocklist_doc(user_id)
     return bool(doc and doc.get("active", False))
 
-
-# ─── Write helpers ────────────────────────────────────────────────────────────
 
 async def add_to_permanent_blocklist(user_id, user_to_block: str) -> None:
     await db.add_to_blocklist(user_id, user_to_block, "permanent")
@@ -84,8 +79,6 @@ async def atomic_check_and_add_blocklist(user_id, user_to_block: str) -> bool:
         await add_to_temporary_blocklist(user_id, user_to_block)
         return False
 
-
-# ─── UI helpers ───────────────────────────────────────────────────────────────
 
 def _blocklist_text(active: bool, permanent: set, temporary: set) -> str:
     status_label = "ON" if active else "OFF"
@@ -123,8 +116,6 @@ async def _send_blocklist_ui(target, edit: bool = True) -> None:
 async def blocklist_command(message_or_callback, edit: bool = True) -> None:
     await _send_blocklist_ui(message_or_callback, edit=edit)
 
-
-# ─── Callback handler ─────────────────────────────────────────────────────────
 
 async def handle_blocklist_callback(callback_query: types.CallbackQuery) -> bool:
     """Return True if handled."""

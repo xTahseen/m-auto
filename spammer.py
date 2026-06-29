@@ -46,7 +46,7 @@ def generate_gmail_dot_variants(email):
     combos = list(set(combos))
     return combos
 
-# Unified check_email_exists — reuses a shared session for all checks
+
 async def check_email_exists(session, email):
     url = "https://api.meeff.com/user/checkEmail/v1"
     payload = {"email": email, "locale": "en"}
@@ -92,14 +92,14 @@ async def check_many_emails(emails, needed, concurrency=20):
                             stop_event.set()
 
         tasks = [asyncio.ensure_future(worker(e)) for e in emails]
-        # Wait until we have enough or all tasks finish
+
         while not stop_event.is_set() and any(not t.done() for t in tasks):
             await asyncio.sleep(0.05)
-        # Cancel remaining tasks now that we have enough
+
         for t in tasks:
             if not t.done():
                 t.cancel()
-        # Await cancellations silently
+
         await asyncio.gather(*tasks, return_exceptions=True)
 
     return found
@@ -186,7 +186,7 @@ async def spammer_message_handler(message: Message):
             await message.answer("Enter M or F for gender:", reply_markup=SPAMMER_MENU)
             return True
         state["gender"] = gender
-        # NEW: Ask for signup country before description/photos
+
         state["stage"] = "ask_signup_country"
         await message.answer("Enter the country code for SIGNUP (nationality, e.g. US, UK, RU):", reply_markup=SPAMMER_MENU)
         return True
@@ -238,7 +238,7 @@ async def spammer_message_handler(message: Message):
     if state.get("stage") == "ask_country":
         cc = message.text.strip().upper()
         if cc == "" or cc == "ALL":
-            state["filter_country"] = ""  # All countries
+            state["filter_country"] = ""
             state["stage"] = "ask_age_from"
             await message.answer("Enter minimum age (e.g. 18):", reply_markup=SPAMMER_MENU)
             return True
@@ -274,7 +274,7 @@ async def spammer_message_handler(message: Message):
             if state["filter_country"]:
                 filter_obj["filterNationalityCode"] = state["filter_country"]
             else:
-                filter_obj["filterNationalityCode"] = ""  # All countries
+                filter_obj["filterNationalityCode"] = ""
             filter_obj["filterBirthYearFrom"] = year - max_age
             filter_obj["filterBirthYearTo"] = year - min_age
             state["filter_obj"] = filter_obj
@@ -291,11 +291,11 @@ async def spammer_message_handler(message: Message):
                     "photos": state["photos"],
                     "filters": filter_obj.copy(),
                     "signup_country": state.get("signup_country", "US"),
-                    "device_info": random_device_info()  # unique device per account
+                    "device_info": random_device_info()
                 }
                 signup_result = await try_signup(user_state)
                 if signup_result.get("user", {}).get("_id"):
-                    # Get initial login token so verify step can reuse it
+
                     initial_login = await try_signin(user_state["email"], user_state["password"], user_state.get("device_info"))
                     if initial_login.get("accessToken"):
                         user_state["pending_access_token"] = initial_login["accessToken"]
@@ -358,7 +358,7 @@ async def spammer_callback_handler(callback: CallbackQuery):
         DELAY_SECONDS = 30
         for idx, email in enumerate(to_check):
             account = email_to_account[email]
-            # Show progress before attempting login
+
             await callback.message.edit_text(
                 f"Verifying account {idx + 1}/{total}\n"
                 f"<code>{email}</code>\n\n"
@@ -378,7 +378,7 @@ async def spammer_callback_handler(callback: CallbackQuery):
                         await set_device_info(user_id, access_token, account["device_info"])
                     filters = account["filters"]
                     await set_user_filters(user_id, access_token, filters)
-                    # Push filters to Meeff API so they are actually applied on the account
+
                     try:
                         async with aiohttp.ClientSession() as _session:
                             async with _session.post(
@@ -410,7 +410,7 @@ async def spammer_callback_handler(callback: CallbackQuery):
                 still_unverified.append(email + " (not verified)")
             else:
                 still_unverified.append(f"{email} ({error_msg})")
-            # Wait between accounts (skip delay after the last one)
+
             if idx < total - 1:
                 for remaining in range(DELAY_SECONDS, 0, -1):
                     await callback.message.edit_text(
@@ -457,7 +457,7 @@ async def spammer_callback_handler(callback: CallbackQuery):
             login_result = await try_signin(account["email"], account["password"], account.get("device_info"), access_token=account.get("pending_access_token"))
             access_token = login_result.get("accessToken")
             if access_token:
-                # Refresh stored pending token for future verify attempts
+
                 account["pending_access_token"] = access_token
                 resend_result = await resend_verification_email(access_token)
                 if resend_result.get("errorCode") in ("", None):

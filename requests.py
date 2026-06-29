@@ -40,20 +40,18 @@ class NoMoreUsersError(Exception):
 class AuthRequiredError(Exception):
     """Raised when the API returns errorCode AuthRequired (token expired / logged out)."""
 
-# ─── Constants ─────────────────────────────────────────────────────────────────
 
 _MEEFF_ANSWER_URL = "https://api.meeff.com/user/undoableAnswer/v5/?userId={user_id}&isOkay=1"
 _MEEFF_FILTER_URL = "https://api.meeff.com/user/updateFilter/v1"
-_FILTER_PUSH_INTERVAL = 7   # push filters every N successful sends
+_FILTER_PUSH_INTERVAL = 7
 
 SPEED_LEVELS: dict[str, tuple[str, float]] = {
     "default": ("Default (3s)", 3.0),
     "turbo":   ("Turbo (0.02s)", 0.02),
 }
 
-UPDATE_INTERVAL = 2  # seconds between status-message edits
+UPDATE_INTERVAL = 2
 
-# ─── Markups ───────────────────────────────────────────────────────────────────
 
 REQUESTS_CHOICE_MARKUP = InlineKeyboardMarkup(inline_keyboard=[
     [
@@ -84,8 +82,6 @@ def get_speed_markup(current_speed: str | None = None) -> InlineKeyboardMarkup:
     buttons.append(InlineKeyboardButton(text="Custom", callback_data="speed_custom"))
     return InlineKeyboardMarkup(inline_keyboard=[buttons])
 
-
-# ─── Formatters ────────────────────────────────────────────────────────────────
 
 def _time_ago(dt_str: str | None) -> str:
     if not dt_str:
@@ -204,8 +200,6 @@ def _format_result(accounts: list[dict], names: list[str],
     return "\n".join(lines)
 
 
-# ─── Telegram helpers ─────────────────────────────────────────────────────────
-
 async def safe_edit(bot, chat_id, msg_id, text, markup=None) -> None:
     try:
         await bot.edit_message_text(
@@ -218,8 +212,6 @@ async def safe_edit(bot, chat_id, msg_id, text, markup=None) -> None:
     except Exception as e:
         logger.warning("safe_edit unexpected: %s", e)
 
-
-# ─── Meeff API helpers ────────────────────────────────────────────────────────
 
 async def _fetch_users(session: aiohttp.ClientSession, token: str, user_id=None) -> list:
     url = await get_explore_url(user_id) if user_id is not None else None
@@ -283,8 +275,6 @@ async def _should_skip(user_id, user_data: dict) -> bool:
 
     return False
 
-
-# ─── Core runners ──────────────────────────────────────────────────────────────
 
 async def run_requests_single(user_id, state: dict, bot, token: str,
                                account_name: str, speed: float) -> None:
@@ -507,8 +497,6 @@ async def run_requests_parallel(user_id, bot, tokens: list[dict],
     )
 
 
-# ─── Shared start helpers ─────────────────────────────────────────────────────
-
 async def _start_current_run(user_id, state: dict, bot, current_token: str,
                               account_name: str, speed: float, reply_target) -> None:
     state.update({"running": True, "finalized": False, "mode": "current", "skipped_count": 0})
@@ -574,8 +562,6 @@ def _cleanup_state(state: dict) -> None:
         state.pop(key, None)
 
 
-# ─── Custom speed message handler ────────────────────────────────────────────
-
 async def handle_custom_speed_message(message, state: dict, bot, get_tokens, get_current_account) -> None:
     user_id = message.from_user.id
     try:
@@ -605,8 +591,6 @@ async def handle_custom_speed_message(message, state: dict, bot, get_tokens, get
     else:
         await message.reply("Speed selection is not valid here.")
 
-
-# ─── Callback handler ─────────────────────────────────────────────────────────
 
 async def handle_requests_callback(
     callback_query, state: dict, bot, user_id,

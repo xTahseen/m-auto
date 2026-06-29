@@ -13,7 +13,6 @@ HEADERS = {
     'content-type': "application/json; charset=utf-8"
 }
 
-# --- Helpers for API Calls ---
 
 async def fetch_chatrooms(session, token, from_date=None):
     headers = {**HEADERS, 'meeff-access-token': token}
@@ -46,7 +45,6 @@ async def send_message(session, token, chatroom_id, message):
             return None
         return await resp.json()
 
-# --- Main Feature: Send message to all chatrooms ---
 
 async def send_message_to_everyone(token, messages, status_message=None, bot=None, chat_id=None):
     if isinstance(messages, str):
@@ -89,7 +87,6 @@ async def send_message_to_everyone(token, messages, status_message=None, bot=Non
         )
     return sent_count
 
-# --- Command Handler for /chatroom ---
 
 async def chatroom_command_handler(message, has_valid_access, get_current_account, get_tokens, user_states):
     user_id = message.chat.id
@@ -125,7 +122,6 @@ async def chatroom_command_handler(message, has_valid_access, get_current_accoun
         parse_mode="HTML"
     )
 
-# --- Callback Handler for chatroom actions ---
 
 async def handle_chatroom_callback(
     callback_query, state, bot, user_id,

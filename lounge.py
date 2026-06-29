@@ -13,7 +13,6 @@ HEADERS = {
     'content-type': "application/json; charset=utf-8"
 }
 
-# --- Helpers for API Calls ---
 
 async def fetch_lounge_users(token):
     headers = {**HEADERS, 'meeff-access-token': token}
@@ -48,7 +47,6 @@ async def send_message(token, chatroom_id, message):
                 return None
             return await response.json()
 
-# --- Main Feature: Send message to all lounge users ---
 
 async def handle_user(token, user, messages, bot, chat_id, status_message):
     user_id = user["user"]["_id"]
@@ -88,7 +86,6 @@ async def send_lounge(token, messages="hi", status_message=None, bot=None, chat_
     logging.info(f"Finished sending messages. Total Lounge Users: {total_users}, Messages sent: {sent_count}")
     return sent_count
 
-# --- Command Handler for /lounge ---
 
 async def lounge_command_handler(message, has_valid_access, get_current_account, user_states):
     user_id = message.chat.id
@@ -120,7 +117,6 @@ async def lounge_command_handler(message, has_valid_access, get_current_account,
         parse_mode="HTML"
     )
 
-# --- Callback Handler for lounge actions ---
 
 async def handle_lounge_callback(
     callback_query, state, bot, user_id,

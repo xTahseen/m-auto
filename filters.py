@@ -34,8 +34,6 @@ NATIONALITY_COUNTRIES = [
 GENDER_MAP = {"male": 6, "female": 5, "all": 7}
 
 
-# ─── Keyboard builders ────────────────────────────────────────────────────────
-
 def get_filter_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [
@@ -79,8 +77,6 @@ def get_nationality_keyboard() -> InlineKeyboardMarkup:
     ])
 
 
-# ─── Default filter builder ───────────────────────────────────────────────────
-
 def _build_filter_data(existing: dict) -> dict:
     """Merge stored values with safe defaults."""
     return {
@@ -97,8 +93,6 @@ def _build_filter_data(existing: dict) -> dict:
         "locale": "en",
     }
 
-
-# ─── Commands & handlers ──────────────────────────────────────────────────────
 
 async def filter_command(msg, edit: bool = False) -> None:
     user_id = getattr(msg, "chat", msg).id
@@ -129,7 +123,7 @@ async def set_filter(callback_query: types.CallbackQuery) -> None:
     existing = (await get_user_filters(user_id, token)) or {}
     filter_data = _build_filter_data(existing)
 
-    # ── Navigation callbacks (no API call needed) ──────────────────────────
+
     if d == "filter_gender":
         await callback_query.message.edit_text(
             "<b>Gender</b> — select a filter:", reply_markup=get_gender_keyboard(), parse_mode="HTML"
@@ -156,7 +150,7 @@ async def set_filter(callback_query: types.CallbackQuery) -> None:
         await callback_query.answer()
         return
 
-    # ── Value-setting callbacks ────────────────────────────────────────────
+
     if d.startswith("filter_gender_"):
         gender = d.split("_")[-1]
         filter_data["filterGenderType"] = GENDER_MAP.get(gender, 5)
@@ -173,7 +167,7 @@ async def set_filter(callback_query: types.CallbackQuery) -> None:
         confirm_msg = f"Filter updated: Nationality set to {'All' if nationality == 'all' else nationality.upper()}"
 
     else:
-        return  # unknown callback prefix — ignore
+        return
 
     await set_user_filters(user_id, token, filter_data)
 

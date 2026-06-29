@@ -150,7 +150,7 @@ async def update_country_filter(session, headers, country_code):
 async def fetch_users(session, headers, user_id):
     url = await get_explore_url(user_id)
     if not url:
-        return None  # signals caller that URL is missing
+        return None
     try:
         async with session.get(url, headers=headers) as resp:
             if resp.status == 200:
@@ -190,7 +190,7 @@ async def run_all_countries_token(user_id, state, bot, token, account_name):
             await update_country_filter(session, headers, country_code)
             users = await fetch_users(session, headers, user_id)
             if users is None:
-                # No explore URL saved — prompt the user and abort
+
                 await safe_edit(
                     bot, user_id, state["status_message_id"],
                     "⚠️ <b>No Explore URL saved.</b>\n\n"
@@ -215,7 +215,7 @@ async def run_all_countries_token(user_id, state, bot, token, account_name):
                     like_limit_exceeded = True
                     break
 
-                # Add to blocklist only after a successful like
+
                 if await is_blocklist_active(user_id):
                     await add_to_temporary_blocklist(user_id, user["_id"])
 

@@ -34,13 +34,13 @@ _lock = asyncio.Lock()
 _conn: aiosqlite.Connection | None = None
 
 
-# ─── Init / Teardown ───────────────────────────────────────────────────────────
+async def _ensure_schema() -> None:
+    """Create any missing tables and run column/trigger migrations on the live connection.
 
-async def init_db() -> None:
-    """Open the shared connection and create tables. Call once at startup."""
-    global _conn
-    _conn = await aiosqlite.connect(DB_PATH, check_same_thread=False)
-    _conn.row_factory = aiosqlite.Row
+    Called on every (re)connect — both at startup and after restore_db — so that an
+    older backup file (missing tables or columns added in later versions) is always
+    brought up to the current schema before the app uses it.
+    """
     await _conn.executescript("""
         PRAGMA journal_mode=WAL;
         PRAGMA synchronous=NORMAL;
@@ -55,6 +55,7 @@ async def init_db() -> None:
             filters_json     TEXT,
             info_card        TEXT,
             device_info_json TEXT,
+            created_at       TEXT DEFAULT (datetime('now','subsec')),
             PRIMARY KEY (user_id, token)
         );
 
@@ -83,7 +84,73 @@ async def init_db() -> None:
         );
     """)
     await _conn.commit()
+    await _migrate_add_created_at()
+    await _ensure_created_at_trigger()
+
+
+async def init_db() -> None:
+    """Open the shared connection and create tables. Call once at startup."""
+    global _conn
+    _conn = await aiosqlite.connect(DB_PATH, check_same_thread=False)
+    _conn.row_factory = aiosqlite.Row
+    await _ensure_schema()
     logger.info("Database initialised at %s", DB_PATH)
+
+
+async def _migrate_add_created_at() -> None:
+    """One-time migration: add created_at to profile if missing, backfill by rowid order.
+
+    SQLite forbids ALTER TABLE ... ADD COLUMN with a non-constant default (like
+    datetime('now')) on a table that already has rows, so we add the column plain,
+    then backfill in a separate UPDATE.
+
+    Rows created before this migration have no created_at value. We backfill them using
+    their rowid (SQLite's insertion-order proxy for a normal, non-WITHOUT-ROWID table) so
+    existing accounts keep their relative oldest->newest order.
+
+    A trigger handles all *future* inserts: the column default in CREATE TABLE only
+    applies to brand-new databases, not to a column added via ALTER TABLE, so without
+    this trigger every account added after migration would get created_at=NULL and
+    sort order would break again.
+    """
+    cur = await _conn.execute("PRAGMA table_info(profile)")
+    cols = [r["name"] for r in await cur.fetchall()]
+    if "created_at" in cols:
+        return
+    logger.info("Migrating profile table: adding created_at column")
+    await _conn.execute("ALTER TABLE profile ADD COLUMN created_at TEXT")
+
+    await _conn.execute(
+        """UPDATE profile
+           SET created_at = (
+               SELECT datetime('2000-01-01', '+' || sub.rn || ' seconds')
+               FROM (
+                   SELECT rowid AS rid, ROW_NUMBER() OVER (ORDER BY rowid) AS rn
+                   FROM profile
+               ) AS sub
+               WHERE sub.rid = profile.rowid
+           )
+           WHERE created_at IS NULL"""
+    )
+    await _conn.commit()
+    await _ensure_created_at_trigger()
+
+
+async def _ensure_created_at_trigger() -> None:
+    """Auto-populate created_at on insert for rows that didn't set it explicitly.
+
+    Needed because a column added via ALTER TABLE doesn't carry the CREATE TABLE
+    default, and several INSERT statements across this file don't list created_at.
+    """
+    await _conn.execute(
+        """CREATE TRIGGER IF NOT EXISTS trg_profile_created_at
+           AFTER INSERT ON profile
+           WHEN NEW.created_at IS NULL
+           BEGIN
+               UPDATE profile SET created_at = datetime('now','subsec') WHERE rowid = NEW.rowid;
+           END"""
+    )
+    await _conn.commit()
 
 
 async def close_db() -> None:
@@ -99,8 +166,6 @@ def _get_conn() -> aiosqlite.Connection:
         raise RuntimeError("Database not initialised — call await init_db() at startup.")
     return _conn
 
-
-# ─── JSON helpers ──────────────────────────────────────────────────────────────
 
 def _j(v) -> str | None:
     return json.dumps(v) if v is not None else None
@@ -122,16 +187,15 @@ def _row_to_account(r) -> dict:
         "filters": _uj(r["filters_json"]),
         "active": bool(r["active"]),
         "email": r["email"],
+        "created_at": r["created_at"] if "created_at" in r.keys() else None,
     }
 
-
-# ─── Profile / Token CRUD ──────────────────────────────────────────────────────
 
 async def set_token(user_id, token: str, account_name: str, email: str | None = None, filters=None) -> None:
     async with _lock:
         conn = _get_conn()
         if email:
-            # Remove duplicate entries for the same email with a different token
+
             await conn.execute(
                 "DELETE FROM profile WHERE user_id=? AND email=? AND token!=?",
                 (str(user_id), email, token),
@@ -160,30 +224,33 @@ async def set_account_active(user_id, token: str, active: bool) -> None:
 
 
 async def get_tokens(user_id) -> list[dict]:
-    """Return only active accounts."""
+    """Return only active accounts, oldest first."""
     conn = _get_conn()
     cur = await conn.execute(
-        "SELECT token, name, filters_json, active, email FROM profile WHERE user_id=? AND active=1",
+        "SELECT token, name, filters_json, active, email, created_at FROM profile "
+        "WHERE user_id=? AND active=1 ORDER BY created_at ASC, rowid ASC",
         (str(user_id),),
     )
     return [_row_to_account(r) for r in await cur.fetchall()]
 
 
 async def get_all_tokens(user_id) -> list[dict]:
-    """Return all accounts regardless of active flag."""
+    """Return all accounts regardless of active flag, oldest first."""
     conn = _get_conn()
     cur = await conn.execute(
-        "SELECT token, name, filters_json, active, email FROM profile WHERE user_id=?",
+        "SELECT token, name, filters_json, active, email, created_at FROM profile "
+        "WHERE user_id=? ORDER BY created_at ASC, rowid ASC",
         (str(user_id),),
     )
     return [_row_to_account(r) for r in await cur.fetchall()]
 
 
 async def list_tokens() -> list[dict]:
-    """Return all active accounts across all users."""
+    """Return all active accounts across all users, oldest first."""
     conn = _get_conn()
     cur = await conn.execute(
-        "SELECT user_id, token, name, filters_json, active, email FROM profile WHERE active=1"
+        "SELECT user_id, token, name, filters_json, active, email, created_at FROM profile "
+        "WHERE active=1 ORDER BY created_at ASC, rowid ASC"
     )
     return [
         {"user_id": r["user_id"], **_row_to_account(r)}
@@ -269,8 +336,6 @@ async def update_token_metadata(user_id, token: str, name: str | None = None,
         await conn.commit()
 
 
-# ─── Info Card ─────────────────────────────────────────────────────────────────
-
 async def set_info_card(user_id, token: str, info_card: str, email: str | None = None) -> None:
     async with _lock:
         conn = _get_conn()
@@ -299,8 +364,6 @@ async def get_info_card(user_id, token: str) -> str | None:
     return row["info_card"] if row else None
 
 
-# ─── Device Info ───────────────────────────────────────────────────────────────
-
 async def set_device_info(user_id, token: str, device_info: dict) -> None:
     async with _lock:
         conn = _get_conn()
@@ -322,8 +385,6 @@ async def get_device_info(user_id, token: str) -> dict | None:
     return _uj(row["device_info_json"]) if row else None
 
 
-# ─── Explore URL ───────────────────────────────────────────────────────────────
-
 async def set_explore_url(user_id, url: str) -> None:
     async with _lock:
         conn = _get_conn()
@@ -343,8 +404,6 @@ async def get_explore_url(user_id) -> str | None:
     row = await cur.fetchone()
     return row["explore_url"] if row else None
 
-
-# ─── Country Filters (migrated from MongoDB in countries.py) ──────────────────
 
 async def get_country_filter(user_id) -> dict:
     conn = _get_conn()
@@ -374,8 +433,6 @@ async def save_country_filter(user_id, doc: dict) -> None:
         )
         await conn.commit()
 
-
-# ─── Blocklist ─────────────────────────────────────────────────────────────────
 
 async def get_blocklist_doc(user_id) -> dict | None:
     conn = _get_conn()
@@ -444,8 +501,6 @@ async def add_to_blocklist(user_id, entry: str, list_name: str) -> None:
         await conn.commit()
 
 
-# ─── Transfer ──────────────────────────────────────────────────────────────────
-
 async def transfer_user_data(from_user_id, to_user_id) -> None:
     from_id, to_id = str(from_user_id), str(to_user_id)
     async with _lock:
@@ -484,8 +539,6 @@ async def transfer_user_data(from_user_id, to_user_id) -> None:
         await conn.commit()
 
 
-# ─── Replace Token ─────────────────────────────────────────────────────────────
-
 async def replace_token(user_id, old_token: str, new_token: str) -> None:
     if not old_token or not new_token or old_token == new_token:
         return
@@ -520,7 +573,7 @@ async def replace_token(user_id, old_token: str, new_token: str) -> None:
                         "DELETE FROM profile WHERE user_id=? AND token=?", (uid, old_token)
                     )
 
-            # Fix token reference inside info_card HTML
+
             cur3 = await conn.execute(
                 "SELECT info_card FROM profile WHERE user_id=? AND token=?", (uid, new_token)
             )
@@ -550,8 +603,6 @@ async def replace_token(user_id, old_token: str, new_token: str) -> None:
         logger.error("replace_token failed: %s", e)
 
 
-# ─── Backup / Restore ──────────────────────────────────────────────────────────
-
 async def backup_db() -> bytes:
     """Return a consistent binary snapshot using SQLite's online backup API."""
     tmp = tempfile.mktemp(suffix=".db")
@@ -559,7 +610,7 @@ async def backup_db() -> bytes:
         async with _lock:
             conn = _get_conn()
             dst = sqlite3.connect(tmp)
-            conn._connection.backup(dst)   # type: ignore[attr-defined]
+            conn._connection.backup(dst)
             dst.close()
         with open(tmp, "rb") as f:
             return f.read()
@@ -586,4 +637,7 @@ async def restore_db(data: bytes) -> None:
         await _conn.execute("PRAGMA journal_mode=WAL")
         await _conn.execute("PRAGMA synchronous=NORMAL")
         await _conn.commit()
+
+
+        await _ensure_schema()
     logger.info("Database restored successfully.")

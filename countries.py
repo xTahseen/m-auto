@@ -16,15 +16,13 @@ from db import get_country_filter, save_country_filter
 logger = logging.getLogger(__name__)
 
 
-# ─── Core filter logic ────────────────────────────────────────────────────────
-
 def _extract_nat_code(user: dict) -> str | None:
     """Extract an ISO-2 nationality code from a Meeff user object."""
     nat = user.get("nationalityCode") or user.get("locale")
     if not nat:
         return None
     nat = nat.strip().upper()
-    # "EN-US" → "US", "KR" → "KR"
+
     if "-" in nat:
         nat = nat.split("-")[-1]
     return nat if len(nat) == 2 else None
@@ -52,7 +50,7 @@ async def should_include_user(user_id: int, user: dict) -> bool:
 
     if doc.get("mode", "exclude") == "exclude":
         return not (nat_code and nat_code in codes)
-    else:  # include mode
+    else:
         return bool(nat_code and nat_code in codes)
 
 
@@ -77,8 +75,6 @@ async def toggle_country_codes(user_id: int, codes: list) -> tuple[list, list]:
     await save_country_filter(user_id, doc)
     return added, removed
 
-
-# ─── UI helpers ───────────────────────────────────────────────────────────────
 
 def _build_keyboard(user_id: int, doc: dict) -> InlineKeyboardMarkup:
     enabled = doc.get("enabled", True)
@@ -124,8 +120,6 @@ def _format_toggle_result(added: list, removed: list) -> str:
     return "\n".join(lines) if lines else "No changes made."
 
 
-# ─── Command handler ──────────────────────────────────────────────────────────
-
 async def countries_command_handler(message: types.Message) -> None:
     """
     /countries              → show status panel
@@ -153,8 +147,6 @@ async def countries_command_handler(message: types.Message) -> None:
         parse_mode="HTML",
     )
 
-
-# ─── Callback handler ─────────────────────────────────────────────────────────
 
 async def handle_countries_callback(callback_query: types.CallbackQuery) -> bool:
     """Return True if the callback was handled."""

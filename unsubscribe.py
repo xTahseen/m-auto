@@ -13,7 +13,6 @@ HEADERS = {
     'content-type': "application/json; charset=utf-8"
 }
 
-# --- Helpers for API Calls ---
 
 async def fetch_chatrooms(session, token, from_date=None):
     headers = {**HEADERS, 'meeff-access-token': token}
@@ -46,7 +45,6 @@ async def unsubscribe_chatroom(session, token, chatroom_id):
             return None
         return await resp.json()
 
-# --- Main Feature: Unsubscribe from all chatrooms ---
 
 async def unsubscribe_everyone(token, status_message=None, bot=None, chat_id=None):
     total_unsubscribed, from_date = 0, None
@@ -83,7 +81,6 @@ async def unsubscribe_everyone(token, status_message=None, bot=None, chat_id=Non
         )
     return total_unsubscribed
 
-# --- Command Handler for /skip ---
 
 async def unsubscribe_command_handler(message, has_valid_access, get_current_account, get_tokens, user_states):
     user_id = message.chat.id
@@ -108,7 +105,6 @@ async def unsubscribe_command_handler(message, has_valid_access, get_current_acc
     ])
     await message.reply("How would you like to unsubscribe from chatrooms?", reply_markup=markup)
 
-# --- Callback Handler for unsubscribe actions ---
 
 async def handle_unsubscribe_callback(
     callback_query, state, bot, user_id,
