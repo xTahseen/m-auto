@@ -46,6 +46,15 @@ async def send_message(session, token, chatroom_id, message):
         return await resp.json()
 
 
+async def handle_chatroom(session, token, chatroom, messages):
+    chatroom_id = chatroom["_id"]
+    success = True
+    for message in messages:
+        result = await send_message(session, token, chatroom_id, message.strip())
+        if result is None:
+            success = False
+    return success
+
 async def send_message_to_everyone(token, messages, status_message=None, bot=None, chat_id=None):
     if isinstance(messages, str):
         messages = [msg.strip() for msg in messages.split(",") if msg.strip()]
@@ -62,12 +71,11 @@ async def send_message_to_everyone(token, messages, status_message=None, bot=Non
                 logging.info("No more chatrooms found.")
                 break
             total_chatrooms += len(chatrooms)
-            send_tasks = [
-                send_message(session, token, chatroom["_id"], msg)
-                for chatroom in chatrooms for msg in messages
-            ]
-            await asyncio.gather(*send_tasks)
-            sent_count += len(send_tasks)
+            results = await asyncio.gather(*[
+                handle_chatroom(session, token, chatroom, messages)
+                for chatroom in chatrooms
+            ])
+            sent_count += sum(results)
             if bot and chat_id and status_message:
                 await bot.edit_message_text(
                     chat_id=chat_id,
